@@ -1137,12 +1137,13 @@ const CV_LVARFLAG_ISPARAM: u16 = 0x01;
 const CV_LVARFLAG_ADDRTAKEN: u16 = 0x02;
 const CV_LVARFLAG_COMPGENX: u16 = 0x04;
 const CV_LVARFLAG_ISAGGREGATE: u16 = 0x08;
-const CV_LVARFLAG_ISALIASED: u16 = 0x10;
-const CV_LVARFLAG_ISALIAS: u16 = 0x20;
-const CV_LVARFLAG_ISRETVALUE: u16 = 0x40;
-const CV_LVARFLAG_ISOPTIMIZEDOUT: u16 = 0x80;
-const CV_LVARFLAG_ISENREG_GLOB: u16 = 0x100;
-const CV_LVARFLAG_ISENREG_STAT: u16 = 0x200;
+const CV_LVARFLAG_ISAGGREGATED: u16 = 0x10;
+const CV_LVARFLAG_ISALIASED: u16 = 0x20;
+const CV_LVARFLAG_ISALIAS: u16 = 0x40;
+const CV_LVARFLAG_ISRETVALUE: u16 = 0x80;
+const CV_LVARFLAG_ISOPTIMIZEDOUT: u16 = 0x100;
+const CV_LVARFLAG_ISENREG_GLOB: u16 = 0x200;
+const CV_LVARFLAG_ISENREG_STAT: u16 = 0x400;
 
 /// Flags for a [`LocalSymbol`].
 #[non_exhaustive]
@@ -1157,6 +1158,8 @@ pub struct LocalVariableFlags {
     /// The symbol is splitted in temporaries, which are treated by compiler as independent
     /// entities.
     pub isaggregate: bool,
+    /// Counterpart of fIsAggregate - tells that it is a part of a fIsAggregate symbol
+    pub isaggregated: bool,
     /// Variable has multiple simultaneous lifetimes.
     pub isaliased: bool,
     /// Represents one of the multiple simultaneous lifetimes.
@@ -1182,6 +1185,7 @@ impl<'t> TryFromCtx<'t, Endian> for LocalVariableFlags {
             addrtaken: value & CV_LVARFLAG_ADDRTAKEN != 0,
             compgenx: value & CV_LVARFLAG_COMPGENX != 0,
             isaggregate: value & CV_LVARFLAG_ISAGGREGATE != 0,
+            isaggregated: value & CV_LVARFLAG_ISAGGREGATED != 0,
             isaliased: value & CV_LVARFLAG_ISALIASED != 0,
             isalias: value & CV_LVARFLAG_ISALIAS != 0,
             isretvalue: value & CV_LVARFLAG_ISRETVALUE != 0,
@@ -2917,6 +2921,7 @@ mod tests {
                         addrtaken: false,
                         compgenx: false,
                         isaggregate: false,
+                        isaggregated: false,
                         isaliased: false,
                         isalias: false,
                         isretvalue: false,
