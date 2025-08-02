@@ -221,6 +221,30 @@ pub enum SymbolData<'t> {
     Thunk(ThunkSymbol<'t>),
     /// A block of separated code.
     SeparatedCode(SeparatedCodeSymbol),
+    /// Frame procedure information.
+    FrameProc(FrameProcSymbol),
+    /// Call site information.
+    CallSiteInfo(CallSiteInfoSymbol),
+    /// DefRange for register symbols.
+    DefRangeRegister(DefRangeRegisterSymbol),
+    /// DefRange for subfield register symbols.
+    DefRangeSubfieldRegister(DefRangeSubfieldRegisterSymbol),
+    /// DefRange for frame pointer relative symbols.
+    DefRangeFramePointerRel(DefRangeFramePointerRelSymbol),
+    /// DefRange for frame pointer relative symbols (full scope).
+    DefRangeFramePointerRelFullScope(DefRangeFramePointerRelFullScopeSymbol),
+    /// DefRange for register relative symbols.
+    DefRangeRegisterRel(DefRangeRegisterRelSymbol),
+    /// List of callees.
+    Callees(CalleesSymbol),
+    /// List of inlinees.
+    Inlinees(InlineesSymbol),
+    /// COFF section in a PE executable.
+    Section(SectionSymbol<'t>),
+    /// COFF group.
+    CoffGroup(CoffGroupSymbol<'t>),
+    /// Environment block.
+    EnvBlock(EnvBlockSymbol<'t>),
 }
 
 impl<'t> SymbolData<'t> {
@@ -254,6 +278,18 @@ impl<'t> SymbolData<'t> {
             Self::RegisterRelative(data) => Some(data.name),
             Self::Thunk(data) => Some(data.name),
             Self::SeparatedCode(_) => None,
+            Self::FrameProc(_) => None,
+            Self::CallSiteInfo(_) => None,
+            Self::DefRangeRegister(_) => None,
+            Self::DefRangeSubfieldRegister(_) => None,
+            Self::DefRangeFramePointerRel(_) => None,
+            Self::DefRangeFramePointerRelFullScope(_) => None,
+            Self::DefRangeRegisterRel(_) => None,
+            Self::Callees(_) => None,
+            Self::Inlinees(_) => None,
+            Self::Section(data) => Some(data.name),
+            Self::CoffGroup(data) => Some(data.name),
+            Self::EnvBlock(_) => None,
         }
     }
 }
@@ -307,6 +343,24 @@ impl<'t> TryFromCtx<'t> for SymbolData<'t> {
             S_REGREL32 => SymbolData::RegisterRelative(buf.parse_with(kind)?),
             S_THUNK32 | S_THUNK32_ST => SymbolData::Thunk(buf.parse_with(kind)?),
             S_SEPCODE => SymbolData::SeparatedCode(buf.parse_with(kind)?),
+            S_FRAMEPROC => SymbolData::FrameProc(buf.parse_with(kind)?),
+            S_CALLSITEINFO => SymbolData::CallSiteInfo(buf.parse_with(kind)?),
+            S_DEFRANGE_REGISTER => SymbolData::DefRangeRegister(buf.parse_with(kind)?),
+            S_DEFRANGE_SUBFIELD_REGISTER => {
+                SymbolData::DefRangeSubfieldRegister(buf.parse_with(kind)?)
+            }
+            S_DEFRANGE_FRAMEPOINTER_REL => {
+                SymbolData::DefRangeFramePointerRel(buf.parse_with(kind)?)
+            }
+            S_DEFRANGE_FRAMEPOINTER_REL_FULL_SCOPE => {
+                SymbolData::DefRangeFramePointerRelFullScope(buf.parse_with(kind)?)
+            }
+            S_DEFRANGE_REGISTER_REL => SymbolData::DefRangeRegisterRel(buf.parse_with(kind)?),
+            S_CALLEES => SymbolData::Callees(buf.parse_with(kind)?),
+            S_INLINEES => SymbolData::Inlinees(buf.parse_with(kind)?),
+            S_SECTION => SymbolData::Section(buf.parse_with(kind)?),
+            S_COFFGROUP => SymbolData::CoffGroup(buf.parse_with(kind)?),
+            S_ENVBLOCK => SymbolData::EnvBlock(buf.parse_with(kind)?),
             other => return Err(Error::UnimplementedSymbolKind(other)),
         };
 
@@ -1499,6 +1553,586 @@ impl<'t> TryFromCtx<'t, SymbolKind> for SeparatedCodeSymbol {
     }
 }
 
+/// Frame procedure flags
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrameProcedureFlags {
+    /// Function has _alloca
+    pub has_alloca: bool,
+    /// Function has setjmp
+    pub has_setjmp: bool,
+    /// Function has longjmp
+    pub has_longjmp: bool,
+    /// Function has inline assembly
+    pub has_inline_assembly: bool,
+    /// Function has exception handling
+    pub has_exception_handling: bool,
+    /// Function is marked as inline
+    pub marked_inline: bool,
+    /// Function has structured exception handling
+    pub has_structured_exception_handling: bool,
+    /// Function is naked
+    pub naked: bool,
+    /// Security checks (/GS)
+    pub security_checks: bool,
+    /// Asynchronous exception handling (/EHa)
+    pub async_exception_handling: bool,
+    /// /GS buffer checks are not needed
+    pub no_stack_ordering: bool,
+    /// Function was inlined
+    pub inlined: bool,
+    /// Strict security checks
+    pub strict_security_checks: bool,
+    /// Function is marked as SafeBuffers
+    pub safe_buffers: bool,
+    /// Encoded local base pointer mask
+    pub encoded_local_base_pointer_mask: u8,
+    /// Encoded parameter base pointer mask
+    pub encoded_param_base_pointer_mask: u8,
+    /// Profile guided optimization
+    pub profile_guided_optimization: bool,
+    /// Valid profile counts
+    pub valid_profile_counts: bool,
+    /// Optimized for speed
+    pub optimized_for_speed: bool,
+    /// Function has CFG checks
+    pub guard_cfg: bool,
+    /// Function has CFW checks
+    pub guard_cfw: bool,
+}
+
+impl<'t> TryFromCtx<'t, Endian> for FrameProcedureFlags {
+    type Error = scroll::Error;
+
+    fn try_from_ctx(this: &'t [u8], le: Endian) -> scroll::Result<(Self, usize)> {
+        let (value, size) = u32::try_from_ctx(this, le)?;
+
+        let flags = Self {
+            has_alloca: value & 0x1 != 0,
+            has_setjmp: value & 0x2 != 0,
+            has_longjmp: value & 0x4 != 0,
+            has_inline_assembly: value & 0x8 != 0,
+            has_exception_handling: value & 0x10 != 0,
+            marked_inline: value & 0x20 != 0,
+            has_structured_exception_handling: value & 0x40 != 0,
+            naked: value & 0x80 != 0,
+            security_checks: value & 0x100 != 0,
+            async_exception_handling: value & 0x200 != 0,
+            no_stack_ordering: value & 0x400 != 0,
+            inlined: value & 0x800 != 0,
+            strict_security_checks: value & 0x1000 != 0,
+            safe_buffers: value & 0x2000 != 0,
+            encoded_local_base_pointer_mask: ((value & 0xc000) >> 14) as u8,
+            encoded_param_base_pointer_mask: ((value & 0x30000) >> 16) as u8,
+            profile_guided_optimization: value & 0x40000 != 0,
+            valid_profile_counts: value & 0x80000 != 0,
+            optimized_for_speed: value & 0x100000 != 0,
+            guard_cfg: value & 0x200000 != 0,
+            guard_cfw: value & 0x400000 != 0,
+        };
+
+        Ok((flags, size))
+    }
+}
+
+/// Frame procedure information
+///
+/// Symbol kind `S_FRAMEPROC`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrameProcSymbol {
+    /// Total bytes of frame
+    pub total_frame_bytes: u32,
+    /// Bytes of padding in frame
+    pub padding_frame_bytes: u32,
+    /// Offset to padding
+    pub offset_to_padding: u32,
+    /// Bytes of callee save registers
+    pub bytes_of_callee_saved_registers: u32,
+    /// Offset of exception handler
+    pub offset_of_exception_handler: u32,
+    /// Section id of exception handler
+    pub section_id_of_exception_handler: u16,
+    /// Frame procedure flags
+    pub flags: FrameProcedureFlags,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for FrameProcSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let symbol = FrameProcSymbol {
+            total_frame_bytes: buf.parse()?,
+            padding_frame_bytes: buf.parse()?,
+            offset_to_padding: buf.parse()?,
+            bytes_of_callee_saved_registers: buf.parse()?,
+            offset_of_exception_handler: buf.parse()?,
+            section_id_of_exception_handler: buf.parse()?,
+            flags: buf.parse()?,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// Call site information
+///
+/// Symbol kind `S_CALLSITEINFO`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CallSiteInfoSymbol {
+    /// Code offset of call site
+    pub offset: PdbInternalSectionOffset,
+    /// Type index describing function signature
+    pub type_index: TypeIndex,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for CallSiteInfoSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let offset = buf.parse::<u32>()?;
+        let section = buf.parse::<u16>()?;
+        let _padding = buf.parse::<u16>()?; // padding
+        let type_index = buf.parse()?;
+
+        let symbol = CallSiteInfoSymbol {
+            offset: PdbInternalSectionOffset { offset, section },
+            type_index,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// Local variable address range
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocalVariableAddrRange {
+    /// Start offset
+    pub offset_start: u32,
+    /// Start section
+    pub isect_start: u16,
+    /// Range
+    pub range: u16,
+}
+
+impl<'t> TryFromCtx<'t, Endian> for LocalVariableAddrRange {
+    type Error = scroll::Error;
+
+    fn try_from_ctx(this: &'t [u8], le: Endian) -> scroll::Result<(Self, usize)> {
+        let mut offset = 0;
+        let offset_start = this.pread_with(offset, le)?;
+        offset += 4;
+        let isect_start = this.pread_with(offset, le)?;
+        offset += 2;
+        let range = this.pread_with(offset, le)?;
+        offset += 2;
+
+        Ok((
+            Self {
+                offset_start,
+                isect_start,
+                range,
+            },
+            offset,
+        ))
+    }
+}
+
+/// Local variable address gap
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocalVariableAddrGap {
+    /// Gap start offset
+    pub gap_start_offset: u16,
+    /// Range
+    pub range: u16,
+}
+
+impl<'t> TryFromCtx<'t, Endian> for LocalVariableAddrGap {
+    type Error = scroll::Error;
+
+    fn try_from_ctx(this: &'t [u8], le: Endian) -> scroll::Result<(Self, usize)> {
+        let mut offset = 0;
+        let gap_start_offset = this.pread_with(offset, le)?;
+        offset += 2;
+        let range = this.pread_with(offset, le)?;
+        offset += 2;
+
+        Ok((
+            Self {
+                gap_start_offset,
+                range,
+            },
+            offset,
+        ))
+    }
+}
+
+/// DefRange for register symbols
+///
+/// Symbol kind `S_DEFRANGE_REGISTER`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DefRangeRegisterSymbol {
+    /// Register
+    pub register: Register,
+    /// May have no name
+    pub may_have_no_name: u16,
+    /// Address range
+    pub range: LocalVariableAddrRange,
+    /// Gaps
+    pub gaps: Vec<LocalVariableAddrGap>,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for DefRangeRegisterSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let register = buf.parse()?;
+        let may_have_no_name = buf.parse()?;
+        let range = buf.parse()?;
+
+        let mut gaps = Vec::new();
+        while buf.pos() < buf.len() {
+            gaps.push(buf.parse()?);
+        }
+
+        let symbol = DefRangeRegisterSymbol {
+            register,
+            may_have_no_name,
+            range,
+            gaps,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// DefRange for subfield register symbols
+///
+/// Symbol kind `S_DEFRANGE_SUBFIELD_REGISTER`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DefRangeSubfieldRegisterSymbol {
+    /// Register
+    pub register: Register,
+    /// May have no name
+    pub may_have_no_name: u16,
+    /// Offset in parent
+    pub offset_in_parent: u32,
+    /// Address range
+    pub range: LocalVariableAddrRange,
+    /// Gaps
+    pub gaps: Vec<LocalVariableAddrGap>,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for DefRangeSubfieldRegisterSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let register = buf.parse()?;
+        let may_have_no_name = buf.parse()?;
+        let offset_in_parent = buf.parse()?;
+        let range = buf.parse()?;
+
+        let mut gaps = Vec::new();
+        while buf.pos() < buf.len() {
+            gaps.push(buf.parse()?);
+        }
+
+        let symbol = DefRangeSubfieldRegisterSymbol {
+            register,
+            may_have_no_name,
+            offset_in_parent,
+            range,
+            gaps,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// DefRange for frame pointer relative symbols (full scope)
+///
+/// Symbol kind `S_DEFRANGE_FRAMEPOINTER_REL_FULL_SCOPE`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DefRangeFramePointerRelFullScopeSymbol {
+    /// Offset
+    pub offset: i32,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for DefRangeFramePointerRelFullScopeSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let symbol = DefRangeFramePointerRelFullScopeSymbol {
+            offset: buf.parse()?,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// DefRange for register relative symbols
+///
+/// Symbol kind `S_DEFRANGE_REGISTER_REL`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DefRangeRegisterRelSymbol {
+    /// Register
+    pub register: Register,
+    /// Flags
+    pub flags: u16,
+    /// Base pointer offset
+    pub base_pointer_offset: i32,
+    /// Address range
+    pub range: LocalVariableAddrRange,
+    /// Gaps
+    pub gaps: Vec<LocalVariableAddrGap>,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for DefRangeRegisterRelSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let register = buf.parse()?;
+        let flags = buf.parse()?;
+        let base_pointer_offset = buf.parse()?;
+        let range = buf.parse()?;
+
+        let mut gaps = Vec::new();
+        while buf.pos() < buf.len() {
+            gaps.push(buf.parse()?);
+        }
+
+        let symbol = DefRangeRegisterRelSymbol {
+            register,
+            flags,
+            base_pointer_offset,
+            range,
+            gaps,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// List of callees
+///
+/// Symbol kind `S_CALLEES`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CalleesSymbol {
+    /// Type indices of callees
+    pub type_indices: Vec<TypeIndex>,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for CalleesSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let count: u32 = buf.parse()?;
+        let mut type_indices = Vec::with_capacity(count as usize);
+
+        for _ in 0..count {
+            type_indices.push(buf.parse()?);
+        }
+
+        let symbol = CalleesSymbol { type_indices };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// List of inlinees
+///
+/// Symbol kind `S_INLINEES`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InlineesSymbol {
+    /// Type indices of inlinees
+    pub type_indices: Vec<TypeIndex>,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for InlineesSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let count: u32 = buf.parse()?;
+        let mut type_indices = Vec::with_capacity(count as usize);
+
+        for _ in 0..count {
+            type_indices.push(buf.parse()?);
+        }
+
+        let symbol = InlineesSymbol { type_indices };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// DefRange for frame pointer relative symbols
+///
+/// Symbol kind `S_DEFRANGE_FRAMEPOINTER_REL`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DefRangeFramePointerRelSymbol {
+    /// Offset
+    pub offset: i32,
+    /// Address range
+    pub range: LocalVariableAddrRange,
+    /// Gaps
+    pub gaps: Vec<LocalVariableAddrGap>,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for DefRangeFramePointerRelSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let offset = buf.parse()?;
+        let range = buf.parse()?;
+
+        let mut gaps = Vec::new();
+        while buf.pos() < buf.len() {
+            gaps.push(buf.parse()?);
+        }
+
+        let symbol = DefRangeFramePointerRelSymbol {
+            offset,
+            range,
+            gaps,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// A COFF section symbol
+///
+/// Symbol kind `S_SECTION`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SectionSymbol<'t> {
+    /// Section number
+    pub section_number: u16,
+    /// Alignment
+    pub alignment: u8,
+    /// RVA
+    pub rva: u32,
+    /// Length
+    pub length: u32,
+    /// Characteristics
+    pub characteristics: u32,
+    /// Name
+    pub name: RawString<'t>,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for SectionSymbol<'t> {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], kind: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let section_number = buf.parse()?;
+        let alignment = buf.parse()?;
+        let _padding = buf.parse::<u8>()?; // padding
+        let rva = buf.parse()?;
+        let length = buf.parse()?;
+        let characteristics = buf.parse()?;
+        let name = parse_symbol_name(&mut buf, kind)?;
+
+        let symbol = SectionSymbol {
+            section_number,
+            alignment,
+            rva,
+            length,
+            characteristics,
+            name,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// A COFF group symbol
+///
+/// Symbol kind `S_COFFGROUP`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CoffGroupSymbol<'t> {
+    /// Size
+    pub size: u32,
+    /// Characteristics
+    pub characteristics: u32,
+    /// Offset
+    pub offset: PdbInternalSectionOffset,
+    /// Name
+    pub name: RawString<'t>,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for CoffGroupSymbol<'t> {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], kind: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let size = buf.parse()?;
+        let characteristics = buf.parse()?;
+        let offset = buf.parse::<u32>()?;
+        let section = buf.parse::<u16>()?;
+        let name = parse_symbol_name(&mut buf, kind)?;
+
+        let symbol = CoffGroupSymbol {
+            size,
+            characteristics,
+            offset: PdbInternalSectionOffset { offset, section },
+            name,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// Environment block symbol
+///
+/// Symbol kind `S_ENVBLOCK`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EnvBlockSymbol<'t> {
+    /// Environment strings
+    pub entries: Vec<RawString<'t>>,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for EnvBlockSymbol<'t> {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let _reserved = buf.parse::<u8>()?;
+
+        let mut entries = Vec::new();
+        loop {
+            let string = buf.parse_cstring()?;
+            if string.is_empty() {
+                break;
+            }
+            entries.push(string);
+        }
+
+        let symbol = EnvBlockSymbol { entries };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
 /// PDB symbol tables contain names, locations, and metadata about functions, global/static data,
 /// constants, data types, and more.
 ///
@@ -1686,6 +2320,54 @@ mod tests {
                     len: 9,
                     kind: ThunkKind::PCode,
                     name: "[thunk]:Derived::Func1`adjustor{8}'".into()
+                })
+            );
+        }
+
+        #[test]
+        fn kind_1012() {
+            let data = &[
+                18, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 66,
+                17, 0, 0, 0,
+            ];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(0),
+            };
+            assert_eq!(symbol.raw_kind(), 0x1012);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::FrameProc(FrameProcSymbol {
+                    total_frame_bytes: 0,
+                    padding_frame_bytes: 0,
+                    offset_to_padding: 0,
+                    bytes_of_callee_saved_registers: 0,
+                    offset_of_exception_handler: 0,
+                    section_id_of_exception_handler: 0,
+                    flags: FrameProcedureFlags {
+                        has_alloca: false,
+                        has_setjmp: false,
+                        has_longjmp: false,
+                        has_inline_assembly: false,
+                        has_exception_handling: false,
+                        marked_inline: true,
+                        has_structured_exception_handling: false,
+                        naked: false,
+                        security_checks: false,
+                        async_exception_handling: true,
+                        no_stack_ordering: false,
+                        inlined: false,
+                        strict_security_checks: false,
+                        safe_buffers: false,
+                        encoded_local_base_pointer_mask: 1,
+                        encoded_param_base_pointer_mask: 1,
+                        profile_guided_optimization: false,
+                        valid_profile_counts: false,
+                        optimized_for_speed: true,
+                        guard_cfg: false,
+                        guard_cfw: false,
+                    },
                 })
             );
         }
@@ -2358,6 +3040,264 @@ mod tests {
             };
 
             assert_eq!(symbol, Some(expected));
+        }
+
+        #[test]
+        fn kind_1139() {
+            let data = &[57, 17, 246, 3, 0, 0, 1, 0, 0, 0, 23, 17, 0, 0];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(0),
+            };
+            assert_eq!(symbol.raw_kind(), 0x1139);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::CallSiteInfo(CallSiteInfoSymbol {
+                    offset: PdbInternalSectionOffset {
+                        offset: 0x3f6,
+                        section: 1,
+                    },
+                    type_index: TypeIndex(0x1117),
+                })
+            );
+        }
+
+        #[test]
+        fn kind_1141() {
+            let data = &[65, 17, 74, 1, 0, 0, 192, 3, 0, 0, 1, 0, 32, 0];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(0),
+            };
+            assert_eq!(symbol.raw_kind(), 0x1141);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::DefRangeRegister(DefRangeRegisterSymbol {
+                    register: Register(0x14a),
+                    may_have_no_name: 0,
+                    range: LocalVariableAddrRange {
+                        offset_start: 0x3c0,
+                        isect_start: 1,
+                        range: 0x20,
+                    },
+                    gaps: vec![],
+                })
+            );
+        }
+
+        #[test]
+        fn kind_1142() {
+            let data = &[66, 17, 56, 0, 0, 0, 174, 13, 0, 0, 1, 0, 93, 0];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(0),
+            };
+            assert_eq!(symbol.raw_kind(), 0x1142);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::DefRangeFramePointerRel(DefRangeFramePointerRelSymbol {
+                    offset: 0x38,
+                    range: LocalVariableAddrRange {
+                        offset_start: 0xdae,
+                        isect_start: 1,
+                        range: 0x5d,
+                    },
+                    gaps: vec![],
+                })
+            );
+        }
+
+        #[test]
+        fn kind_1143() {
+            let data = &[67, 17, 74, 1, 0, 0, 0, 0, 0, 0, 80, 4, 0, 0, 1, 0, 40, 0];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(0),
+            };
+            assert_eq!(symbol.raw_kind(), 0x1143);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::DefRangeSubfieldRegister(DefRangeSubfieldRegisterSymbol {
+                    register: Register(0x14a),
+                    may_have_no_name: 0, // TODO This should be true accord to llvm-pdbutil
+                    offset_in_parent: 0,
+                    range: LocalVariableAddrRange {
+                        offset_start: 0x450,
+                        isect_start: 1,
+                        range: 0x28,
+                    },
+                    gaps: vec![],
+                })
+            );
+        }
+
+        #[test]
+        fn kind_1144() {
+            let data = &[68, 17, 80, 0, 0, 0];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(0),
+            };
+            assert_eq!(symbol.raw_kind(), 0x1144);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::DefRangeFramePointerRelFullScope(
+                    DefRangeFramePointerRelFullScopeSymbol { offset: 80 }
+                )
+            );
+        }
+
+        #[test]
+        fn kind_1145() {
+            let data = &[69, 17, 78, 1, 0, 0, 32, 0, 0, 0, 78, 59, 0, 0, 1, 0, 23, 0];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(0),
+            };
+            assert_eq!(symbol.raw_kind(), 0x1145);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::DefRangeRegisterRel(DefRangeRegisterRelSymbol {
+                    register: Register(0x14e),
+                    flags: 0x00,
+                    base_pointer_offset: 0x20,
+                    range: LocalVariableAddrRange {
+                        offset_start: 0x3b4e,
+                        isect_start: 1,
+                        range: 0x17,
+                    },
+                    gaps: vec![],
+                })
+            );
+        }
+
+        #[test]
+        fn kind_115a() {
+            let data = &[90, 17, 1, 0, 0, 0, 98, 16, 0, 0];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(0),
+            };
+            assert_eq!(symbol.raw_kind(), 0x115a);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::Callees(CalleesSymbol {
+                    type_indices: vec![TypeIndex(0x1062)],
+                })
+            );
+        }
+
+        #[test]
+        fn kind_1168() {
+            let data = &[104, 17, 1, 0, 0, 0, 102, 16, 0, 0];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(0),
+            };
+            assert_eq!(symbol.raw_kind(), 0x1168);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::Inlinees(InlineesSymbol {
+                    type_indices: vec![TypeIndex(0x1066)],
+                })
+            );
+        }
+
+        #[test]
+        fn kind_1136() {
+            let data = &[
+                54, 17, 1, 0, 12, 0, 0, 16, 0, 0, 145, 75, 0, 0, 32, 0, 0, 96, 46, 116, 101, 120,
+                116, 0, 0, 0,
+            ];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(0),
+            };
+            assert_eq!(symbol.raw_kind(), 0x1136);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::Section(SectionSymbol {
+                    section_number: 1,
+                    alignment: 12,
+                    rva: 0x1000,
+                    length: 0x4b91,
+                    characteristics: 0x60000020,
+                    name: ".text".into(),
+                })
+            );
+        }
+
+        #[test]
+        fn kind_1137() {
+            let data = &[
+                55, 17, 16, 43, 0, 0, 32, 0, 0, 96, 0, 0, 0, 0, 1, 0, 46, 116, 101, 120, 116, 36,
+                109, 110, 0, 0,
+            ];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(0),
+            };
+            assert_eq!(symbol.raw_kind(), 0x1137);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::CoffGroup(CoffGroupSymbol {
+                    size: 0x2b10,
+                    characteristics: 0x60000020,
+                    offset: PdbInternalSectionOffset {
+                        offset: 0,
+                        section: 1,
+                    },
+                    name: ".text$mn".into(),
+                })
+            );
+        }
+
+        #[test]
+        fn kind_113d() {
+            let data = &[
+                61, 17, 0, 99, 119, 100, 0, 68, 58, 92, 97, 92, 95, 119, 111, 114, 107, 92, 49, 92,
+                115, 92, 115, 114, 99, 92, 118, 99, 116, 111, 111, 108, 115, 92, 99, 114, 116, 92,
+                118, 99, 115, 116, 97, 114, 116, 117, 112, 92, 98, 117, 105, 108, 100, 92, 109,
+                100, 92, 109, 115, 118, 99, 114, 116, 95, 107, 101, 114, 110, 101, 108, 51, 50, 0,
+                101, 120, 101, 0, 68, 58, 92, 97, 92, 95, 119, 111, 114, 107, 92, 49, 92, 115, 92,
+                115, 114, 99, 92, 116, 111, 111, 108, 115, 92, 118, 99, 116, 111, 111, 108, 115,
+                92, 68, 101, 118, 49, 52, 92, 98, 105, 110, 92, 120, 54, 52, 92, 97, 109, 100, 54,
+                52, 92, 109, 108, 54, 52, 46, 101, 120, 101, 0, 115, 114, 99, 0, 68, 58, 92, 97,
+                92, 95, 119, 111, 114, 107, 92, 49, 92, 115, 92, 115, 114, 99, 92, 118, 99, 116,
+                111, 111, 108, 115, 92, 99, 114, 116, 92, 118, 99, 115, 116, 97, 114, 116, 117,
+                112, 92, 115, 114, 99, 92, 109, 105, 115, 99, 92, 97, 109, 100, 54, 52, 92, 103,
+                117, 97, 114, 100, 95, 100, 105, 115, 112, 97, 116, 99, 104, 46, 97, 115, 109, 0,
+                0, 0, 0, 0,
+            ];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(0),
+            };
+            assert_eq!(symbol.raw_kind(), 0x113d);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::EnvBlock(EnvBlockSymbol {
+                    entries: vec![
+                        "cwd".into(),
+                        r"D:\a\_work\1\s\src\vctools\crt\vcstartup\build\md\msvcrt_kernel32".into(),
+                        "exe".into(),
+                        r"D:\a\_work\1\s\src\tools\vctools\Dev14\bin\x64\amd64\ml64.exe".into(),
+                        r"src".into(),
+                        r"D:\a\_work\1\s\src\vctools\crt\vcstartup\src\misc\amd64\guard_dispatch.asm".into(),
+                    ],
+                })
+            );
         }
     }
 }
