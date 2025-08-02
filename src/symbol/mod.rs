@@ -245,6 +245,12 @@ pub enum SymbolData<'t> {
     CoffGroup(CoffGroupSymbol<'t>),
     /// Environment block.
     EnvBlock(EnvBlockSymbol<'t>),
+    /// Security cookie information.
+    FrameCookie(FrameCookieSymbol),
+    /// File static symbol.
+    FileStatic(FileStaticSymbol<'t>),
+    /// Heap allocation site.
+    HeapAllocationSite(HeapAllocationSiteSymbol),
 }
 
 impl<'t> SymbolData<'t> {
@@ -290,6 +296,9 @@ impl<'t> SymbolData<'t> {
             Self::Section(data) => Some(data.name),
             Self::CoffGroup(data) => Some(data.name),
             Self::EnvBlock(_) => None,
+            Self::FrameCookie(_) => None,
+            Self::FileStatic(data) => Some(data.name),
+            Self::HeapAllocationSite(_) => None,
         }
     }
 }
@@ -361,6 +370,9 @@ impl<'t> TryFromCtx<'t> for SymbolData<'t> {
             S_SECTION => SymbolData::Section(buf.parse_with(kind)?),
             S_COFFGROUP => SymbolData::CoffGroup(buf.parse_with(kind)?),
             S_ENVBLOCK => SymbolData::EnvBlock(buf.parse_with(kind)?),
+            S_FRAMECOOKIE => SymbolData::FrameCookie(buf.parse_with(kind)?),
+            S_FILESTATIC => SymbolData::FileStatic(buf.parse_with(kind)?),
+            S_HEAPALLOCSITE => SymbolData::HeapAllocationSite(buf.parse_with(kind)?),
             other => return Err(Error::UnimplementedSymbolKind(other)),
         };
 
@@ -2137,6 +2149,133 @@ impl<'t> TryFromCtx<'t, SymbolKind> for EnvBlockSymbol<'t> {
     }
 }
 
+/// Security cookie information.
+///
+/// Symbol kind `S_FRAMECOOKIE`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrameCookieSymbol {
+    /// Code offset of the cookie.
+    pub code_offset: u32,
+    /// Register containing the cookie.
+    pub register: Register,
+    /// Type of the cookie.
+    pub cookie_kind: FrameCookieKind,
+    /// Flags for the cookie.
+    pub flags: u8,
+}
+
+/// Kind of frame cookie.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrameCookieKind {
+    /// Simple copy of the cookie value.
+    Copy,
+    /// Cookie XORed with the stack pointer.
+    XorStackPointer,
+    /// Cookie XORed with the frame pointer.
+    XorFramePointer,
+    /// Cookie XORed with the R13 register (x64).
+    XorR13,
+    /// Unknown cookie type.
+    Unknown,
+}
+
+impl From<u8> for FrameCookieKind {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => FrameCookieKind::Copy,
+            1 => FrameCookieKind::XorStackPointer,
+            2 => FrameCookieKind::XorFramePointer,
+            3 => FrameCookieKind::XorR13,
+            _ => FrameCookieKind::Unknown,
+        }
+    }
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for FrameCookieSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let symbol = FrameCookieSymbol {
+            code_offset: buf.parse()?,
+            register: buf.parse()?,
+            cookie_kind: FrameCookieKind::from(buf.parse::<u8>()?),
+            flags: buf.parse()?,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// File static symbol.
+///
+/// Symbol kind `S_FILESTATIC`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileStaticSymbol<'t> {
+    /// Type index of the symbol.
+    pub type_index: TypeIndex,
+    /// Module filename offset.
+    pub mod_filename_offset: u32,
+    /// Flags for this symbol.
+    pub flags: LocalVariableFlags,
+    /// Name of the symbol.
+    pub name: RawString<'t>,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for FileStaticSymbol<'t> {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], kind: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let symbol = FileStaticSymbol {
+            type_index: buf.parse()?,
+            mod_filename_offset: buf.parse()?,
+            flags: buf.parse()?,
+            name: parse_symbol_name(&mut buf, kind)?,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// Heap allocation site symbol.
+///
+/// Symbol kind `S_HEAPALLOCSITE` (0x115e).
+///
+/// This symbol identifies locations in the code where heap allocations occur.
+/// It provides information about the allocation call site including the size
+/// and type of allocation being made.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HeapAllocationSiteSymbol {
+    /// Code offset of the heap allocation call.
+    pub code_offset: PdbInternalSectionOffset,
+    /// Size of the call instruction in bytes.
+    pub call_instruction_size: u16,
+    /// Type index describing the type being allocated.
+    pub type_index: TypeIndex,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for HeapAllocationSiteSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let symbol = HeapAllocationSiteSymbol {
+            code_offset: PdbInternalSectionOffset {
+                offset: buf.parse()?,
+                section: buf.parse()?,
+            },
+            call_instruction_size: buf.parse()?,
+            type_index: buf.parse()?,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
 /// PDB symbol tables contain names, locations, and metadata about functions, global/static data,
 /// constants, data types, and more.
 ///
@@ -3301,6 +3440,83 @@ mod tests {
                         r"src".into(),
                         r"D:\a\_work\1\s\src\vctools\crt\vcstartup\src\misc\amd64\guard_dispatch.asm".into(),
                     ],
+                })
+            );
+        }
+
+        #[test]
+        fn kind_113a() {
+            let data = &[58, 17, 56, 0, 0, 0, 79, 1, 1, 0];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(2636),
+            };
+            assert_eq!(symbol.raw_kind(), 0x113a);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::FrameCookie(FrameCookieSymbol {
+                    code_offset: 0x38,
+                    register: Register(0x014f),
+                    cookie_kind: FrameCookieKind::XorStackPointer,
+                    flags: 0x00,
+                })
+            );
+        }
+
+        #[test]
+        fn kind_1153() {
+            let data = &[
+                83, 17, 34, 0, 0, 0, 65, 53, 0, 0, 0, 6, 95, 95, 118, 99, 114, 116, 95, 102, 108,
+                115, 105, 110, 100, 101, 120, 0, 0, 0,
+            ];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(3224),
+            };
+            assert_eq!(symbol.raw_kind(), 0x1153);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::FileStatic(FileStaticSymbol {
+                    type_index: TypeIndex(0x0022),
+                    mod_filename_offset: 0x00003541,
+                    flags: LocalVariableFlags {
+                        isparam: false,
+                        addrtaken: false,
+                        compgenx: false,
+                        isaggregate: false,
+                        isaggregated: false,
+                        isaliased: false,
+                        isalias: false,
+                        isretvalue: false,
+                        isoptimizedout: false,
+                        isenreg_glob: true,
+                        isenreg_stat: true,
+                    },
+                    name: "__vcrt_flsindex".into(),
+                })
+            );
+        }
+
+        #[test]
+        fn kind_115e() {
+            let data = &[94, 17, 165, 10, 103, 0, 1, 0, 5, 0, 175, 129, 1, 0];
+
+            let symbol = Symbol {
+                data,
+                index: SymbolIndex(62096),
+            };
+            assert_eq!(symbol.raw_kind(), 0x115e);
+            assert_eq!(
+                symbol.parse().expect("parse"),
+                SymbolData::HeapAllocationSite(HeapAllocationSiteSymbol {
+                    code_offset: PdbInternalSectionOffset {
+                        offset: 0x670aa5,
+                        section: 1,
+                    },
+                    call_instruction_size: 0x5,
+                    type_index: TypeIndex(0x181af),
                 })
             );
         }
