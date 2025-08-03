@@ -1,6 +1,77 @@
 use pdb::{FallibleIterator, PDB};
 use std::env;
 
+struct DumpContext<'a> {
+    show_va: bool,
+    image_base: u64,
+    address_map: pdb::AddressMap<'a>,
+}
+
+impl<'a> DumpContext<'a> {
+    fn new(show_va: bool, image_base: u64, address_map: pdb::AddressMap<'a>) -> Self {
+        Self {
+            show_va,
+            image_base,
+            address_map,
+        }
+    }
+
+    fn format_address(&self, offset: &pdb::PdbInternalSectionOffset) -> String {
+        let rva = offset.to_rva(&self.address_map).unwrap_or_default();
+        if self.show_va {
+            let va = self.image_base + rva.0 as u64;
+            format!(
+                "{:04X}:{:08X} [VA 0x{:016X}]",
+                offset.section, offset.offset, va
+            )
+        } else {
+            format!(
+                "{:04X}:{:08X} [RVA 0x{:08X}]",
+                offset.section, offset.offset, rva.0
+            )
+        }
+    }
+
+    fn format_dual_address(
+        &self,
+        offset1: &pdb::PdbInternalSectionOffset,
+        offset2: &pdb::PdbInternalSectionOffset,
+        name1: &str,
+        name2: &str,
+    ) -> String {
+        let rva1 = offset1.to_rva(&self.address_map).unwrap_or_default();
+        let rva2 = offset2.to_rva(&self.address_map).unwrap_or_default();
+
+        if self.show_va {
+            let va1 = self.image_base + rva1.0 as u64;
+            let va2 = self.image_base + rva2.0 as u64;
+            format!(
+                "{} @ {:04X}:{:08X} [VA 0x{:016X}], {} @ {:04X}:{:08X} [VA 0x{:016X}]",
+                name1,
+                offset1.section,
+                offset1.offset,
+                va1,
+                name2,
+                offset2.section,
+                offset2.offset,
+                va2
+            )
+        } else {
+            format!(
+                "{} @ {:04X}:{:08X} [RVA 0x{:08X}], {} @ {:04X}:{:08X} [RVA 0x{:08X}]",
+                name1,
+                offset1.section,
+                offset1.offset,
+                rva1.0,
+                name2,
+                offset2.section,
+                offset2.offset,
+                rva2.0
+            )
+        }
+    }
+}
+
 fn dump_pdb_info(pdb: &mut PDB<'_, std::fs::File>) -> pdb::Result<()> {
     println!("=== PDB Information ===");
 
@@ -53,30 +124,41 @@ fn dump_streams(pdb: &mut PDB<'_, std::fs::File>) -> pdb::Result<()> {
     Ok(())
 }
 
-fn print_symbol(symbol: &pdb::Symbol<'_>, indent: &str) -> pdb::Result<()> {
+fn print_symbol(symbol: &pdb::Symbol<'_>, indent: &str, ctx: &DumpContext<'_>) -> pdb::Result<()> {
     match symbol.parse() {
         Ok(pdb::SymbolData::Public(data)) => {
             println!(
-                "{}PUBLIC: {} @ {:04X}:{:08X} (function: {})",
-                indent, data.name, data.offset.section, data.offset.offset, data.function
+                "{}PUBLIC: {} @ {} (function: {})",
+                indent,
+                data.name,
+                ctx.format_address(&data.offset),
+                data.function
             );
         }
         Ok(pdb::SymbolData::Data(data)) => {
             println!(
-                "{}DATA: {} @ {:04X}:{:08X} (global: {})",
-                indent, data.name, data.offset.section, data.offset.offset, data.global
+                "{}DATA: {} @ {} (global: {})",
+                indent,
+                data.name,
+                ctx.format_address(&data.offset),
+                data.global
             );
         }
         Ok(pdb::SymbolData::Procedure(data)) => {
             println!(
-                "{}PROCEDURE: {} @ {:04X}:{:08X} (len: 0x{:X})",
-                indent, data.name, data.offset.section, data.offset.offset, data.len
+                "{}PROCEDURE: {} @ {} (len: 0x{:X})",
+                indent,
+                data.name,
+                ctx.format_address(&data.offset),
+                data.len
             );
         }
         Ok(pdb::SymbolData::Thunk(data)) => {
             println!(
-                "{}THUNK: {} @ {:04X}:{:08X}",
-                indent, data.name, data.offset.section, data.offset.offset
+                "{}THUNK: {} @ {}",
+                indent,
+                data.name,
+                ctx.format_address(&data.offset)
             );
         }
         Ok(pdb::SymbolData::Constant(data)) => {
@@ -118,8 +200,11 @@ fn print_symbol(symbol: &pdb::Symbol<'_>, indent: &str) -> pdb::Result<()> {
         }
         Ok(pdb::SymbolData::ThreadStorage(data)) => {
             println!(
-                "{}THREAD_STORAGE: {} @ {:04X}:{:08X} (type: {:?})",
-                indent, data.name, data.offset.section, data.offset.offset, data.type_index
+                "{}THREAD_STORAGE: {} @ {} (type: {:?})",
+                indent,
+                data.name,
+                ctx.format_address(&data.offset),
+                data.type_index
             );
         }
         Ok(pdb::SymbolData::AnnotationReference(data)) => {
@@ -130,14 +215,11 @@ fn print_symbol(symbol: &pdb::Symbol<'_>, indent: &str) -> pdb::Result<()> {
         }
         Ok(pdb::SymbolData::Trampoline(data)) => {
             println!(
-                "{}TRAMPOLINE: type={:?}, size={}, thunk @ {:04X}:{:08X}, target @ {:04X}:{:08X}",
+                "{}TRAMPOLINE: type={:?}, size={}, {}",
                 indent,
                 data.tramp_type,
                 data.size,
-                data.thunk.section,
-                data.thunk.offset,
-                data.target.section,
-                data.target.offset
+                ctx.format_dual_address(&data.thunk, &data.target, "thunk", "target")
             );
         }
         Ok(pdb::SymbolData::Local(data)) => {
@@ -174,14 +256,18 @@ fn print_symbol(symbol: &pdb::Symbol<'_>, indent: &str) -> pdb::Result<()> {
         }
         Ok(pdb::SymbolData::Block(data)) => {
             println!(
-                "{}BLOCK: @ {:04X}:{:08X} (len: 0x{:X})",
-                indent, data.offset.section, data.offset.offset, data.len
+                "{}BLOCK: @ {} (len: 0x{:X})",
+                indent,
+                ctx.format_address(&data.offset),
+                data.len
             );
         }
         Ok(pdb::SymbolData::Label(data)) => {
             println!(
-                "{}LABEL: {} @ {:04X}:{:08X}",
-                indent, data.name, data.offset.section, data.offset.offset
+                "{}LABEL: {} @ {}",
+                indent,
+                data.name,
+                ctx.format_address(&data.offset)
             );
         }
         Ok(pdb::SymbolData::UsingNamespace(data)) => {
@@ -225,8 +311,9 @@ fn print_symbol(symbol: &pdb::Symbol<'_>, indent: &str) -> pdb::Result<()> {
         }
         Ok(pdb::SymbolData::Annotation(data)) => {
             println!(
-                "{}ANNOTATION: @ {:04X}:{:08X}",
-                indent, data.code_offset.section, data.code_offset.offset
+                "{}ANNOTATION: @ {}",
+                indent,
+                ctx.format_address(&data.code_offset)
             );
             for (i, s) in data.strings.iter().enumerate() {
                 println!("{}  [{}] {}", indent, i, s);
@@ -240,16 +327,17 @@ fn print_symbol(symbol: &pdb::Symbol<'_>, indent: &str) -> pdb::Result<()> {
         }
         Ok(pdb::SymbolData::CallSiteInfo(data)) => {
             println!(
-                "{}CALL_SITE_INFO: @ {:04X}:{:08X} (type: {:?})",
-                indent, data.offset.section, data.offset.offset, data.type_index
+                "{}CALL_SITE_INFO: @ {} (type: {:?})",
+                indent,
+                ctx.format_address(&data.offset),
+                data.type_index
             );
         }
         Ok(pdb::SymbolData::HeapAllocationSite(data)) => {
             println!(
-                "{}HEAP_ALLOC_SITE: @ {:04X}:{:08X} (type: {:?}, size: 0x{:X})",
+                "{}HEAP_ALLOC_SITE: @ {} (type: {:?}, size: 0x{:X})",
                 indent,
-                data.code_offset.section,
-                data.code_offset.offset,
+                ctx.format_address(&data.code_offset),
                 data.type_index,
                 data.call_instruction_size
             );
@@ -308,8 +396,11 @@ fn print_symbol(symbol: &pdb::Symbol<'_>, indent: &str) -> pdb::Result<()> {
         }
         Ok(pdb::SymbolData::SeparatedCode(data)) => {
             println!(
-                "{}SEPARATED_CODE: parent={:?}, @ {:04X}:{:08X} (len: 0x{:X})",
-                indent, data.parent, data.offset.section, data.offset.offset, data.len
+                "{}SEPARATED_CODE: parent={:?}, @ {} (len: 0x{:X})",
+                indent,
+                data.parent,
+                ctx.format_address(&data.offset),
+                data.len
             );
             println!("{}  Flags: {:?}", indent, data.flags);
         }
@@ -385,8 +476,13 @@ fn print_symbol(symbol: &pdb::Symbol<'_>, indent: &str) -> pdb::Result<()> {
     Ok(())
 }
 
-fn dump_symbols(pdb: &mut PDB<'_, std::fs::File>) -> pdb::Result<()> {
+fn dump_symbols(pdb: &mut PDB<'_, std::fs::File>, ctx: &DumpContext<'_>) -> pdb::Result<()> {
     println!("\n=== Symbol Information ===");
+    let addr_type = if ctx.show_va { "VA" } else { "RVA" };
+    println!("Address format: {}", addr_type);
+    if ctx.show_va {
+        println!("Using image base: 0x{:016X}", ctx.image_base);
+    }
 
     // Dump global symbols
     println!("\nGlobal Symbols:");
@@ -396,7 +492,7 @@ fn dump_symbols(pdb: &mut PDB<'_, std::fs::File>) -> pdb::Result<()> {
 
     // Show all symbols in detail
     while let Some(symbol) = symbols.next()? {
-        print_symbol(&symbol, "  ")?;
+        print_symbol(&symbol, "  ", ctx)?;
         count += 1;
     }
     println!("  Total: {} global symbols", count);
@@ -414,7 +510,7 @@ fn dump_symbols(pdb: &mut PDB<'_, std::fs::File>) -> pdb::Result<()> {
             let mut mod_count = 0;
 
             while let Some(symbol) = module_symbols.next()? {
-                print_symbol(&symbol, "    ")?;
+                print_symbol(&symbol, "    ", ctx)?;
                 mod_count += 1;
             }
             println!("    Total symbols in module: {}", mod_count);
@@ -719,35 +815,6 @@ fn dump_source_files(pdb: &mut PDB<'_, std::fs::File>) -> pdb::Result<()> {
     }
 
     println!("  Total source files: {}", total_files);
-
-    Ok(())
-}
-
-fn dump_publics(pdb: &mut PDB<'_, std::fs::File>) -> pdb::Result<()> {
-    println!("\n=== Public Symbols ===");
-
-    // The global symbol table contains public symbols
-    // We'll filter for public symbols specifically
-    let symbol_table = pdb.global_symbols()?;
-    let address_map = pdb.address_map()?;
-    let mut symbols = symbol_table.iter();
-    let mut count = 0;
-
-    while let Some(symbol) = symbols.next()? {
-        match symbol.parse() {
-            Ok(pdb::SymbolData::Public(data)) => {
-                let rva = data.offset.to_rva(&address_map).unwrap_or_default();
-                println!(
-                    "  {} @ RVA 0x{:08X} (section {:04X}:{:08X})",
-                    data.name, rva.0, data.offset.section, data.offset.offset
-                );
-                count += 1;
-            }
-            _ => {}
-        }
-    }
-
-    println!("  Total public symbols: {}", count);
 
     Ok(())
 }
@@ -1072,12 +1139,72 @@ fn dump_statistics(pdb: &mut PDB<'_, std::fs::File>) -> pdb::Result<()> {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() != 2 {
-        eprintln!("Usage: {} <input.pdb>", args[0]);
+    if args.len() < 2 || args.len() > 4 {
+        eprintln!(
+            "Usage: {} <input.pdb> [--va|--rva] [image_base_hex]",
+            args[0]
+        );
+        eprintln!("  --va: Show Virtual Addresses (requires image base)");
+        eprintln!("  --rva: Show Relative Virtual Addresses (default)");
+        eprintln!("  image_base_hex: Image base address in hex (default: 0x140000000 for VA mode)");
+        eprintln!("  Examples:");
+        eprintln!("    {} sample.pdb", args[0]);
+        eprintln!("    {} sample.pdb --rva", args[0]);
+        eprintln!("    {} sample.pdb --va", args[0]);
+        eprintln!("    {} sample.pdb --va 0x400000", args[0]);
         std::process::exit(1);
     }
 
     let filename = &args[1];
+    let mut show_va = false;
+    let mut image_base = 0x140000000u64; // Default for 64-bit Windows
+    let mut arg_idx = 2;
+
+    // Parse address format flag
+    if args.len() > 2 {
+        match args[2].as_str() {
+            "--va" => {
+                show_va = true;
+                arg_idx = 3;
+            }
+            "--rva" => {
+                show_va = false;
+                arg_idx = 3;
+            }
+            _ => {
+                // No flag specified, check if it's a hex number
+                if args[2].starts_with("0x") || args[2].chars().all(|c| c.is_ascii_hexdigit()) {
+                    // It's an image base, default to VA mode
+                    show_va = true;
+                    arg_idx = 2;
+                } else {
+                    eprintln!("Error: Unknown flag '{}'. Use --va or --rva", args[2]);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // Parse image base if provided
+    if args.len() > arg_idx {
+        let hex_str = args[arg_idx].strip_prefix("0x").unwrap_or(&args[arg_idx]);
+        match u64::from_str_radix(hex_str, 16) {
+            Ok(base) => image_base = base,
+            Err(_) => {
+                eprintln!(
+                    "Error: Invalid hex format for image base: {}",
+                    args[arg_idx]
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // For RVA mode, image base is not used but we keep it for consistency
+    if !show_va {
+        image_base = 0;
+    }
+
     println!("Dumping PDB: {}", filename);
 
     let file = match std::fs::File::open(filename) {
@@ -1096,6 +1223,16 @@ fn main() {
         }
     };
 
+    // Create the dump context
+    let address_map = match pdb.address_map() {
+        Ok(map) => map,
+        Err(e) => {
+            eprintln!("Error loading address map: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let ctx = DumpContext::new(show_va, image_base, address_map);
+
     // Dump all the information
     if let Err(e) = dump_pdb_info(&mut pdb) {
         eprintln!("Error dumping PDB info: {}", e);
@@ -1105,7 +1242,7 @@ fn main() {
         eprintln!("Error dumping streams: {}", e);
     }
 
-    if let Err(e) = dump_symbols(&mut pdb) {
+    if let Err(e) = dump_symbols(&mut pdb, &ctx) {
         eprintln!("Error dumping symbols: {}", e);
     }
 
@@ -1119,10 +1256,6 @@ fn main() {
 
     if let Err(e) = dump_source_files(&mut pdb) {
         eprintln!("Error dumping source files: {}", e);
-    }
-
-    if let Err(e) = dump_publics(&mut pdb) {
-        eprintln!("Error dumping publics: {}", e);
     }
 
     if let Err(e) = dump_sections(&mut pdb) {
