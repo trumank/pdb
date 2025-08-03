@@ -251,6 +251,20 @@ pub enum SymbolData<'t> {
     FileStatic(FileStaticSymbol<'t>),
     /// Heap allocation site.
     HeapAllocationSite(HeapAllocationSiteSymbol),
+    /// Annotation symbol.
+    Annotation(AnnotationSymbol<'t>),
+    /// Callers symbol.
+    Callers(CallersSymbol),
+    /// Profile-guided optimization data.
+    PogoData(PogoDataSymbol<'t>),
+    /// Indirect inline site information.
+    InlineSite2Ex(InlineSite2ExSymbol),
+    /// Association symbol.
+    Association(AssociationSymbol),
+    /// Const value on entry.
+    DefRangeConstVal(DefRangeConstValSymbol),
+    /// Global symbol on entry.
+    DefRangeGlobalSym(DefRangeGlobalSymSymbol),
 }
 
 impl<'t> SymbolData<'t> {
@@ -299,6 +313,13 @@ impl<'t> SymbolData<'t> {
             Self::FrameCookie(_) => None,
             Self::FileStatic(data) => Some(data.name),
             Self::HeapAllocationSite(_) => None,
+            Self::Annotation(_) => None,
+            Self::Callers(_) => None,
+            Self::PogoData(data) => Some(data.name),
+            Self::InlineSite2Ex(_) => None,
+            Self::Association(_) => None,
+            Self::DefRangeConstVal(_) => None,
+            Self::DefRangeGlobalSym(_) => None,
         }
     }
 }
@@ -373,6 +394,14 @@ impl<'t> TryFromCtx<'t> for SymbolData<'t> {
             S_FRAMECOOKIE => SymbolData::FrameCookie(buf.parse_with(kind)?),
             S_FILESTATIC => SymbolData::FileStatic(buf.parse_with(kind)?),
             S_HEAPALLOCSITE => SymbolData::HeapAllocationSite(buf.parse_with(kind)?),
+            S_ANNOTATION => SymbolData::Annotation(buf.parse_with(kind)?),
+            S_CALLERS => SymbolData::Callers(buf.parse_with(kind)?),
+            S_POGODATA => SymbolData::PogoData(buf.parse_with(kind)?),
+            S_REGREL32_INDIR => SymbolData::PogoData(buf.parse_with(kind)?), // 0x1171 variant
+            S_DEFRANGE_REGISTER_REL_INDIR => SymbolData::InlineSite2Ex(buf.parse_with(kind)?),
+            S_ASSOCIATION => SymbolData::Association(buf.parse_with(kind)?),
+            S_DEFRANGE_CONSTVAL_ON_ENTRY => SymbolData::DefRangeConstVal(buf.parse_with(kind)?),
+            S_DEFRANGE_GLOBALSYM_ON_ENTRY => SymbolData::DefRangeGlobalSym(buf.parse_with(kind)?),
             other => return Err(Error::UnimplementedSymbolKind(other)),
         };
 
@@ -2270,6 +2299,233 @@ impl<'t> TryFromCtx<'t, SymbolKind> for HeapAllocationSiteSymbol {
             },
             call_instruction_size: buf.parse()?,
             type_index: buf.parse()?,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// Annotation symbol containing string literals.
+///
+/// Symbol kind `S_ANNOTATION` (0x1019).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnnotationSymbol<'t> {
+    /// Code offset of the annotation.
+    pub code_offset: PdbInternalSectionOffset,
+    /// Annotation strings.
+    pub strings: Vec<RawString<'t>>,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for AnnotationSymbol<'t> {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let code_offset = PdbInternalSectionOffset {
+            offset: buf.parse()?,
+            section: buf.parse()?,
+        };
+
+        let mut strings = Vec::new();
+        let count: u16 = buf.parse()?;
+        for _ in 0..count {
+            strings.push(buf.parse_cstring()?);
+        }
+
+        let symbol = AnnotationSymbol {
+            code_offset,
+            strings,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// Callers symbol.
+///
+/// Symbol kind `S_CALLERS` (0x115b).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CallersSymbol {
+    /// Number of callers.
+    pub count: u32,
+    /// Function indices and counts.
+    pub callers: Vec<u8>,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for CallersSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let count = buf.parse()?;
+        let callers = buf.take(buf.len())?.to_vec();
+
+        let symbol = CallersSymbol { count, callers };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// Profile-guided optimization data.
+///
+/// Symbol kind `S_POGODATA` (0x115c).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PogoDataSymbol<'t> {
+    /// Invocation count.
+    pub invocation_count: u32,
+    /// Dynamic instruction count.
+    pub dynamic_instruction_count: u64,
+    /// Static instruction count.
+    pub static_instruction_count: u32,
+    /// Live static instruction count.
+    pub live_static_instruction_count: u32,
+    /// Optional name (for 0x1171 variant).
+    pub name: RawString<'t>,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for PogoDataSymbol<'t> {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], kind: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let symbol = if kind == S_REGREL32_INDIR {
+            // 0x1171 variant with name
+            let offset: u32 = buf.parse()?;
+            let segment: u16 = buf.parse()?;
+            let flags: u16 = buf.parse()?;
+            let type_index: u32 = buf.parse()?;
+            let register: u16 = buf.parse()?;
+            let name = buf.parse_cstring()?;
+            
+            PogoDataSymbol {
+                invocation_count: offset,
+                dynamic_instruction_count: (segment as u64) | ((flags as u64) << 16),
+                static_instruction_count: type_index,
+                live_static_instruction_count: register as u32,
+                name,
+            }
+        } else {
+            // Standard S_POGODATA
+            PogoDataSymbol {
+                invocation_count: buf.parse()?,
+                dynamic_instruction_count: buf.parse()?,
+                static_instruction_count: buf.parse()?,
+                live_static_instruction_count: buf.parse()?,
+                name: RawString::default(),
+            }
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// Extended inline site information.
+///
+/// Symbol kind `S_DEFRANGE_REGISTER_REL_INDIR` (0x1177).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlineSite2ExSymbol {
+    /// Register.
+    pub register: u16,
+    /// Flags.
+    pub flags: u16,
+    /// Offset.
+    pub offset: u32,
+    /// Type index.
+    pub type_index: u32,
+    /// Optional extra data.
+    pub extra: u32,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for InlineSite2ExSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let symbol = InlineSite2ExSymbol {
+            register: buf.parse()?,
+            flags: buf.parse()?,
+            offset: buf.parse()?,
+            type_index: buf.parse()?,
+            extra: buf.parse()?,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// Association symbol.
+///
+/// Symbol kind `S_ASSOCIATION` (0x117c).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AssociationSymbol {
+    /// Flags.
+    pub flags: u16,
+    /// Association data.
+    pub data: u32,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for AssociationSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let symbol = AssociationSymbol {
+            flags: buf.parse()?,
+            data: buf.parse()?,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// Constant value on entry.
+///
+/// Symbol kind `S_DEFRANGE_CONSTVAL_ON_ENTRY` (0x117f).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DefRangeConstValSymbol {
+    /// Value.
+    pub value: u32,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for DefRangeConstValSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let symbol = DefRangeConstValSymbol {
+            value: buf.parse()?,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// Global symbol on entry.
+///
+/// Symbol kind `S_DEFRANGE_GLOBALSYM_ON_ENTRY` (0x1180).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DefRangeGlobalSymSymbol {
+    /// Type index.
+    pub type_index: u32,
+    /// Flags.
+    pub flags: u16,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for DefRangeGlobalSymSymbol {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let symbol = DefRangeGlobalSymSymbol {
+            type_index: buf.parse()?,
+            flags: buf.parse()?,
         };
 
         Ok((symbol, buf.pos()))
