@@ -128,29 +128,29 @@ fn print_symbol(symbol: &pdb::Symbol<'_>, indent: &str, ctx: &DumpContext<'_>) -
     match symbol.parse() {
         Ok(pdb::SymbolData::Public(data)) => {
             println!(
-                "{}PUBLIC: {} @ {} (function: {})",
+                "{}PUBLIC: {} (function: {}) {}",
                 indent,
-                data.name,
                 ctx.format_address(&data.offset),
-                data.function
+                data.function,
+                data.name,
             );
         }
         Ok(pdb::SymbolData::Data(data)) => {
             println!(
-                "{}DATA: {} @ {} (global: {})",
+                "{}DATA: {} (global: {}) {}",
                 indent,
-                data.name,
                 ctx.format_address(&data.offset),
-                data.global
+                data.global,
+                data.name,
             );
         }
         Ok(pdb::SymbolData::Procedure(data)) => {
             println!(
-                "{}PROCEDURE: {} @ {} (len: 0x{:X})",
+                "{}PROCEDURE: {} (len: 0x{:X}) {}",
                 indent,
-                data.name,
                 ctx.format_address(&data.offset),
-                data.len
+                data.len,
+                data.name,
             );
         }
         Ok(pdb::SymbolData::Thunk(data)) => {
@@ -200,11 +200,11 @@ fn print_symbol(symbol: &pdb::Symbol<'_>, indent: &str, ctx: &DumpContext<'_>) -
         }
         Ok(pdb::SymbolData::ThreadStorage(data)) => {
             println!(
-                "{}THREAD_STORAGE: {} @ {} (type: {:?})",
+                "{}THREAD_STORAGE: {} (type: {:?}) {}",
                 indent,
-                data.name,
                 ctx.format_address(&data.offset),
-                data.type_index
+                data.type_index,
+                data.name,
             );
         }
         Ok(pdb::SymbolData::AnnotationReference(data)) => {
@@ -264,10 +264,10 @@ fn print_symbol(symbol: &pdb::Symbol<'_>, indent: &str, ctx: &DumpContext<'_>) -
         }
         Ok(pdb::SymbolData::Label(data)) => {
             println!(
-                "{}LABEL: {} @ {}",
+                "{}LABEL: {} {}",
                 indent,
+                ctx.format_address(&data.offset),
                 data.name,
-                ctx.format_address(&data.offset)
             );
         }
         Ok(pdb::SymbolData::UsingNamespace(data)) => {
