@@ -2399,7 +2399,7 @@ impl<'t> TryFromCtx<'t, SymbolKind> for PogoDataSymbol<'t> {
             let type_index: u32 = buf.parse()?;
             let register: u16 = buf.parse()?;
             let name = buf.parse_cstring()?;
-            
+
             PogoDataSymbol {
                 invocation_count: offset,
                 dynamic_instruction_count: (segment as u64) | ((flags as u64) << 16),

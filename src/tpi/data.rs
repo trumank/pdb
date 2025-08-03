@@ -26,6 +26,7 @@ pub enum TypeData<'t> {
     BaseClass(BaseClassType),
     VirtualBaseClass(VirtualBaseClassType),
     VirtualFunctionTablePointer(VirtualFunctionTablePointerType),
+    VirtualFunctionTable(VirtualFunctionTableType<'t>),
     Procedure(ProcedureType),
     Pointer(PointerType),
     Modifier(ModifierType),
@@ -34,6 +35,7 @@ pub enum TypeData<'t> {
     Array(ArrayType),
     Union(UnionType<'t>),
     Bitfield(BitfieldType),
+    VirtualTableShape(VirtualTableShapeType),
     FieldList(FieldList<'t>),
     ArgumentList(ArgumentList),
     MethodList(MethodList),
@@ -93,9 +95,14 @@ pub(crate) fn parse_type_data<'t>(buf: &mut ParseBuffer<'t>) -> Result<TypeData<
         }
 
         // https://github.com/microsoft/microsoft-pdb/issues/50#issuecomment-737890766
-        LF_STRUCTURE19 => {
+        LF_CLASS2 | LF_STRUCTURE2 | LF_INTERFACE2 => {
             let mut class = ClassType {
-                kind: ClassKind::Struct,
+                kind: match leaf {
+                    LF_CLASS2 => ClassKind::Class,
+                    LF_STRUCTURE2 => ClassKind::Struct,
+                    LF_INTERFACE2 => ClassKind::Interface,
+                    _ => unreachable!(),
+                },
                 properties: TypeProperties(buf.parse_u32()? as u16),
                 fields: parse_optional_type_index(buf)?,
                 derived_from: parse_optional_type_index(buf)?,
@@ -345,14 +352,55 @@ pub(crate) fn parse_type_data<'t>(buf: &mut ParseBuffer<'t>) -> Result<TypeData<
 
         // https://github.com/Microsoft/microsoft-pdb/blob/082c5290e5aff028ae84e43affa8be717aa7af73/include/cvinfo.h#L1819-L1823
         LF_VTSHAPE => {
-            // TODO
-            Err(Error::UnimplementedTypeKind(leaf))
+            let count = buf.parse_u16()? as usize;
+            let mut descriptors = Vec::with_capacity(count);
+
+            // Each byte contains two 4-bit descriptors
+            let bytes_needed = (count + 1) / 2;
+            for _ in 0..bytes_needed {
+                let byte = buf.parse_u8()?;
+
+                // Low 4 bits
+                if descriptors.len() < count {
+                    descriptors.push(VirtualTableShapeDescriptor::from_u8(byte & 0xF)?);
+                }
+
+                // High 4 bits
+                if descriptors.len() < count {
+                    descriptors.push(VirtualTableShapeDescriptor::from_u8(byte >> 4)?);
+                }
+            }
+
+            // Consume any padding
+            parse_padding(buf)?;
+
+            Ok(TypeData::VirtualTableShape(VirtualTableShapeType {
+                descriptors,
+            }))
         }
 
         // https://github.com/Microsoft/microsoft-pdb/blob/082c5290e5aff028ae84e43affa8be717aa7af73/include/cvinfo.h#L1825-L1837
         LF_VFTABLE => {
-            // TODO
-            Err(Error::UnimplementedTypeKind(leaf))
+            let owner_type = buf.parse()?;
+            let base_vftable = buf.parse()?;
+            let offset_in_object_layout = buf.parse_u32()?;
+            let names_len = buf.parse_u32()? as usize;
+
+            let mut names = Vec::new();
+
+            let mut len = 0;
+            while len < names_len {
+                let name = buf.parse_cstring()?;
+                len += name.len() + 1;
+                names.push(name);
+            }
+
+            Ok(TypeData::VirtualFunctionTable(VirtualFunctionTableType {
+                owner_type,
+                base_vftable,
+                offset_in_object_layout,
+                names,
+            }))
         }
 
         // https://github.com/Microsoft/microsoft-pdb/blob/082c5290e5aff028ae84e43affa8be717aa7af73/include/cvinfo.h#L2521-L2528
@@ -432,7 +480,10 @@ pub(crate) fn parse_type_data<'t>(buf: &mut ParseBuffer<'t>) -> Result<TypeData<
             Ok(TypeData::MethodList(MethodList { methods }))
         }
 
-        _ => Err(Error::UnimplementedTypeKind(leaf)),
+        _ => {
+            // panic!("TODO");
+            Err(Error::UnimplementedTypeKind(leaf))
+        }
     }
 }
 
@@ -948,6 +999,19 @@ pub struct VirtualFunctionTablePointerType {
     pub table: TypeIndex,
 }
 
+/// The information parsed from a type record with kind `LF_VFTABLE`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VirtualFunctionTableType<'t> {
+    /// Class/structure that owns the vftable
+    pub owner_type: TypeIndex,
+    /// vftable from which this vftable is derived
+    pub base_vftable: TypeIndex,
+    /// Offset of vfptr relative to object start
+    pub offset_in_object_layout: u32,
+    /// Names of the vtable and its methods
+    pub names: Vec<RawString<'t>>,
+}
+
 /// The information parsed from a type record with kind `LF_PROCEDURE`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct ProcedureType {
@@ -1030,6 +1094,43 @@ pub struct BitfieldType {
     pub underlying_type: TypeIndex,
     pub length: u8,
     pub position: u8,
+}
+
+/// Virtual table shape descriptor
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum VirtualTableShapeDescriptor {
+    Near = 0x00,
+    Far = 0x01,
+    Thin = 0x02,
+    Outer = 0x03,
+    Meta = 0x04,
+    Near32 = 0x05,
+    Far32 = 0x06,
+    Unused = 0x07,
+}
+
+impl VirtualTableShapeDescriptor {
+    fn from_u8(value: u8) -> Result<Self> {
+        match value {
+            0x00 => Ok(VirtualTableShapeDescriptor::Near),
+            0x01 => Ok(VirtualTableShapeDescriptor::Far),
+            0x02 => Ok(VirtualTableShapeDescriptor::Thin),
+            0x03 => Ok(VirtualTableShapeDescriptor::Outer),
+            0x04 => Ok(VirtualTableShapeDescriptor::Meta),
+            0x05 => Ok(VirtualTableShapeDescriptor::Near32),
+            0x06 => Ok(VirtualTableShapeDescriptor::Far32),
+            0x07 => Ok(VirtualTableShapeDescriptor::Unused),
+            _ => Err(Error::UnimplementedFeature(
+                "Unknown virtual table shape descriptor",
+            )),
+        }
+    }
+}
+
+/// The information parsed from a type record with kind `LF_VTSHAPE`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VirtualTableShapeType {
+    pub descriptors: Vec<VirtualTableShapeDescriptor>,
 }
 
 /// The information parsed from a type record with kind `LF_FIELDLIST`.
