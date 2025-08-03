@@ -382,6 +382,7 @@ pub(crate) fn parse_type_data<'t>(buf: &mut ParseBuffer<'t>) -> Result<TypeData<
 
                         // parse the TypeIndex where we continue
                         continuation = Some(buf.parse()?);
+                        break;
                     }
                     _ => {
                         // other type
