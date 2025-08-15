@@ -24,11 +24,20 @@ impl Language {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub language: Language,
+    pub skip_dependencies: bool,
 }
 
 impl Config {
     pub fn new(language: Language) -> Self {
-        Self { language }
+        Self {
+            language,
+            skip_dependencies: false,
+        }
+    }
+
+    pub fn with_skip_dependencies(mut self, skip_dependencies: bool) -> Self {
+        self.skip_dependencies = skip_dependencies;
+        self
     }
 }
 
@@ -113,17 +122,23 @@ pub fn type_name<'p>(
         },
 
         pdb::TypeData::Class(data) => {
-            needed_types.insert(type_index);
+            if !config.skip_dependencies {
+                needed_types.insert(type_index);
+            }
             data.name.to_string().into_owned()
         }
 
         pdb::TypeData::Enumeration(data) => {
-            needed_types.insert(type_index);
+            if !config.skip_dependencies {
+                needed_types.insert(type_index);
+            }
             data.name.to_string().into_owned()
         }
 
         pdb::TypeData::Union(data) => {
-            needed_types.insert(type_index);
+            if !config.skip_dependencies {
+                needed_types.insert(type_index);
+            }
             data.name.to_string().into_owned()
         }
 
@@ -805,13 +820,15 @@ fn write_class(config: &Config, filename: &str, class_name: &str) -> pdb::Result
         }
     }
 
-    // add all the needed types iteratively until we're done
-    while let Some(type_index) = needed_types.iter().next_back().copied() {
-        // remove it
-        needed_types.remove(&type_index);
+    // add all the needed types iteratively until we're done (unless skipping dependencies)
+    if !config.skip_dependencies {
+        while let Some(type_index) = needed_types.iter().next_back().copied() {
+            // remove it
+            needed_types.remove(&type_index);
 
-        // add the type
-        data.add(config, &type_finder, type_index, &mut needed_types)?;
+            // add the type
+            data.add(config, &type_finder, type_index, &mut needed_types)?;
+        }
     }
 
     if data.classes.is_empty() {
@@ -824,7 +841,10 @@ fn write_class(config: &Config, filename: &str, class_name: &str) -> pdb::Result
 }
 
 fn print_usage(program: &str, opts: getopts::Options) {
-    let brief = format!("Usage: {} <language> input.pdb ClassName", program);
+    let brief = format!(
+        "Usage: {} [options] <language> input.pdb ClassName",
+        program
+    );
     print!("{}", opts.usage(&brief));
 }
 
@@ -834,6 +854,11 @@ fn main() {
 
     let mut opts = getopts::Options::new();
     opts.optflag("h", "help", "print this help menu");
+    opts.optflag(
+        "",
+        "no-deps",
+        "skip dependency types, only output the main requested type",
+    );
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
@@ -858,7 +883,7 @@ fn main() {
         }
     };
 
-    let config = Config::new(language);
+    let config = Config::new(language).with_skip_dependencies(matches.opt_present("no-deps"));
 
     match write_class(&config, filename, class_name) {
         Ok(_) => (),
