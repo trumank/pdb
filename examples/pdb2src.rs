@@ -39,80 +39,78 @@ pub fn type_name<'p>(
     needed_types: &mut TypeSet,
 ) -> pdb::Result<String> {
     let mut name = match type_finder.find(type_index)?.parse()? {
-        pdb::TypeData::Primitive(data) => {
-            match config.language {
-                Language::Rust => {
-                    let mut name = String::from(if data.indirection.is_some() {
-                        "*const "
-                    } else {
-                        ""
-                    });
+        pdb::TypeData::Primitive(data) => match config.language {
+            Language::Rust => {
+                let mut name = String::from(if data.indirection.is_some() {
+                    "*const "
+                } else {
+                    ""
+                });
 
-                    name.push_str(&match data.kind {
-                        pdb::PrimitiveKind::Void => "void".to_string(),
-                        pdb::PrimitiveKind::Char => "char".to_string(),
-                        pdb::PrimitiveKind::RChar => "char".to_string(),
-                        pdb::PrimitiveKind::UChar => "unsigned char".to_string(),
-                        pdb::PrimitiveKind::WChar => "wchar_t".to_string(),
+                name.push_str(&match data.kind {
+                    pdb::PrimitiveKind::Void => "void".to_string(),
+                    pdb::PrimitiveKind::Char => "char".to_string(),
+                    pdb::PrimitiveKind::RChar => "char".to_string(),
+                    pdb::PrimitiveKind::UChar => "unsigned char".to_string(),
+                    pdb::PrimitiveKind::WChar => "wchar_t".to_string(),
 
-                        pdb::PrimitiveKind::I8 => "i8".to_string(),
-                        pdb::PrimitiveKind::U8 => "u8".to_string(),
-                        pdb::PrimitiveKind::I16 => "i16".to_string(),
-                        pdb::PrimitiveKind::U16 => "u16".to_string(),
-                        pdb::PrimitiveKind::I32 => "i32".to_string(),
-                        pdb::PrimitiveKind::U32 => "u32".to_string(),
-                        pdb::PrimitiveKind::I64 => "i64".to_string(),
-                        pdb::PrimitiveKind::U64 => "u64".to_string(),
+                    pdb::PrimitiveKind::I8 => "i8".to_string(),
+                    pdb::PrimitiveKind::U8 => "u8".to_string(),
+                    pdb::PrimitiveKind::I16 => "i16".to_string(),
+                    pdb::PrimitiveKind::U16 => "u16".to_string(),
+                    pdb::PrimitiveKind::I32 => "i32".to_string(),
+                    pdb::PrimitiveKind::U32 => "u32".to_string(),
+                    pdb::PrimitiveKind::I64 => "i64".to_string(),
+                    pdb::PrimitiveKind::U64 => "u64".to_string(),
 
-                        pdb::PrimitiveKind::F32 => "f32".to_string(),
-                        pdb::PrimitiveKind::F64 => "f64".to_string(),
+                    pdb::PrimitiveKind::F32 => "f32".to_string(),
+                    pdb::PrimitiveKind::F64 => "f64".to_string(),
 
-                        pdb::PrimitiveKind::UShort => "u16".to_string(),
-                        pdb::PrimitiveKind::UQuad => "u64".to_string(),
+                    pdb::PrimitiveKind::UShort => "u16".to_string(),
+                    pdb::PrimitiveKind::UQuad => "u64".to_string(),
 
-                        pdb::PrimitiveKind::Bool8 => "bool".to_string(),
+                    pdb::PrimitiveKind::Bool8 => "bool".to_string(),
 
-                        _ => format!("unhandled_primitive.kind /* {:?} */", data.kind),
-                    });
+                    _ => format!("unhandled_primitive.kind /* {:?} */", data.kind),
+                });
 
-                    name
-                }
-                Language::Cpp => {
-                    let mut name = match data.kind {
-                        pdb::PrimitiveKind::Void => "void".to_string(),
-                        pdb::PrimitiveKind::Char => "char".to_string(),
-                        pdb::PrimitiveKind::RChar => "char".to_string(),
-                        pdb::PrimitiveKind::UChar => "unsigned char".to_string(),
-                        pdb::PrimitiveKind::WChar => "wchar_t".to_string(),
-
-                        pdb::PrimitiveKind::I8 => "int8_t".to_string(),
-                        pdb::PrimitiveKind::U8 => "uint8_t".to_string(),
-                        pdb::PrimitiveKind::I16 => "int16_t".to_string(),
-                        pdb::PrimitiveKind::U16 => "uint16_t".to_string(),
-                        pdb::PrimitiveKind::I32 => "int32_t".to_string(),
-                        pdb::PrimitiveKind::U32 => "uint32_t".to_string(),
-                        pdb::PrimitiveKind::I64 => "int64_t".to_string(),
-                        pdb::PrimitiveKind::U64 => "uint64_t".to_string(),
-
-                        pdb::PrimitiveKind::F32 => "float".to_string(),
-                        pdb::PrimitiveKind::F64 => "double".to_string(),
-
-                        pdb::PrimitiveKind::UShort => "uint16_t".to_string(),
-                        pdb::PrimitiveKind::UQuad => "uint64_t".to_string(),
-
-                        pdb::PrimitiveKind::Bool8 => "bool".to_string(),
-
-                        _ => format!("unhandled_primitive.kind /* {:?} */", data.kind),
-                    };
-
-                    if data.indirection.is_some() {
-                        name.push_str(" *");
-                    }
-
-                    name
-                }
+                name
             }
-        }
+            Language::Cpp => {
+                let mut name = match data.kind {
+                    pdb::PrimitiveKind::Void => "void".to_string(),
+                    pdb::PrimitiveKind::Char => "char".to_string(),
+                    pdb::PrimitiveKind::RChar => "char".to_string(),
+                    pdb::PrimitiveKind::UChar => "unsigned char".to_string(),
+                    pdb::PrimitiveKind::WChar => "wchar_t".to_string(),
+
+                    pdb::PrimitiveKind::I8 => "int8_t".to_string(),
+                    pdb::PrimitiveKind::U8 => "uint8_t".to_string(),
+                    pdb::PrimitiveKind::I16 => "int16_t".to_string(),
+                    pdb::PrimitiveKind::U16 => "uint16_t".to_string(),
+                    pdb::PrimitiveKind::I32 => "int32_t".to_string(),
+                    pdb::PrimitiveKind::U32 => "uint32_t".to_string(),
+                    pdb::PrimitiveKind::I64 => "int64_t".to_string(),
+                    pdb::PrimitiveKind::U64 => "uint64_t".to_string(),
+
+                    pdb::PrimitiveKind::F32 => "float".to_string(),
+                    pdb::PrimitiveKind::F64 => "double".to_string(),
+
+                    pdb::PrimitiveKind::UShort => "uint16_t".to_string(),
+                    pdb::PrimitiveKind::UQuad => "uint64_t".to_string(),
+
+                    pdb::PrimitiveKind::Bool8 => "bool".to_string(),
+
+                    _ => format!("unhandled_primitive.kind /* {:?} */", data.kind),
+                };
+
+                if data.indirection.is_some() {
+                    name.push_str(" *");
+                }
+
+                name
+            }
+        },
 
         pdb::TypeData::Class(data) => {
             needed_types.insert(type_index);
@@ -202,16 +200,20 @@ pub fn type_name<'p>(
                 None
             };
             let arguments = type_name(config, type_finder, data.argument_list, needed_types)?;
-            
+
             match config.language {
                 Language::Rust => format!(
                     "extern \"system\" fn({}){}",
                     arguments,
-                    return_type.map(|r| format!(" -> {}", r)).unwrap_or_default()
+                    return_type
+                        .map(|r| format!(" -> {}", r))
+                        .unwrap_or_default()
                 ),
                 Language::Cpp => format!(
                     "{}({})",
-                    return_type.map(|r| format!("{}(*)", r)).unwrap_or_else(|| "void(*)".to_string()),
+                    return_type
+                        .map(|r| format!("{}(*)", r))
+                        .unwrap_or_else(|| "void(*)".to_string()),
                     arguments
                 ),
             }
@@ -390,162 +392,94 @@ impl<'p> Class<'p> {
 
 impl<'p> Class<'p> {
     fn write_with_config(&self, w: &mut dyn Write, config: &Config) -> std::io::Result<()> {
-        match config.language {
-            Language::Rust => {
-                write!(
-                    w,
-                    "{} {} ",
-                    match self.kind {
-                        pdb::ClassKind::Class => "struct",
-                        pdb::ClassKind::Struct => "struct",
-                        pdb::ClassKind::Interface => "interface", // when can this happen?
-                    },
-                    self.name.to_string()
-                )?;
+        let class_keyword = match config.language {
+            Language::Rust => match self.kind {
+                pdb::ClassKind::Class => "struct",
+                pdb::ClassKind::Struct => "struct",
+                pdb::ClassKind::Interface => "interface",
+            },
+            Language::Cpp => match self.kind {
+                pdb::ClassKind::Class => "class",
+                pdb::ClassKind::Struct => "struct",
+                pdb::ClassKind::Interface => "interface",
+            },
+        };
 
-                if !self.base_classes.is_empty() {
-                    for (i, base) in self.base_classes.iter().enumerate() {
-                        let prefix = match i {
-                            0 => ":",
-                            _ => ",",
-                        };
-                        write!(w, "{} {}", prefix, base.type_name)?;
-                    }
-                }
+        write!(w, "{} {} ", class_keyword, self.name.to_string())?;
 
-                writeln!(w, " {{")?;
-
-                for base in &self.base_classes {
-                    writeln!(
-                        w,
-                        "\t/* offset 0x{:03x} */ /* fields for {} */",
-                        base.offset, base.type_name
-                    )?;
-                }
-
-                for field in &self.fields {
-                    writeln!(
-                        w,
-                        "\t/* offset 0x{:03x} */ {}: {},",
-                        field.offset,
-                        field.name.to_string(),
-                        field.type_name,
-                    )?;
-                }
-
-                if !self.instance_methods.is_empty() {
-                    writeln!(w, "\t")?;
-                    for method in &self.instance_methods {
-                        writeln!(
-                            w,
-                            "\t{}{}{} {}({});",
-                            if let Some(offset) = method.vtable_offset {
-                                format!("/* @0x{offset:x} */ ")
-                            } else {
-                                " ".into()
-                            },
-                            if method.is_virtual { "virtual " } else { "" },
-                            method.return_type_name,
-                            method.name.to_string(),
-                            method.arguments.join(", ")
-                        )?;
-                    }
-                }
-
-                if !self.static_methods.is_empty() {
-                    writeln!(w, "\t")?;
-                    for method in &self.static_methods {
-                        writeln!(
-                            w,
-                            "\t{}static {} {}({});",
-                            if method.is_virtual { "virtual " } else { "" },
-                            method.return_type_name,
-                            method.name.to_string(),
-                            method.arguments.join(", ")
-                        )?;
-                    }
-                }
-
-                writeln!(w, "}}")?;
-            }
-            Language::Cpp => {
-                write!(
-                    w,
-                    "{} {} ",
-                    match self.kind {
-                        pdb::ClassKind::Class => "class",
-                        pdb::ClassKind::Struct => "struct",
-                        pdb::ClassKind::Interface => "interface", // when can this happen?
-                    },
-                    self.name.to_string()
-                )?;
-
-                if !self.base_classes.is_empty() {
-                    for (i, base) in self.base_classes.iter().enumerate() {
-                        let prefix = match i {
-                            0 => ":",
-                            _ => ",",
-                        };
-                        write!(w, "{} {}", prefix, base.type_name)?;
-                    }
-                }
-
-                writeln!(w, " {{")?;
-
-                for base in &self.base_classes {
-                    writeln!(
-                        w,
-                        "\t/* offset 0x{:03x} */ /* fields for {} */",
-                        base.offset, base.type_name
-                    )?;
-                }
-
-                for field in &self.fields {
-                    writeln!(
-                        w,
-                        "\t/* offset 0x{:03x} */ {} {};",
-                        field.offset,
-                        field.type_name,
-                        field.name.to_string()
-                    )?;
-                }
-
-                if !self.instance_methods.is_empty() {
-                    writeln!(w, "\t")?;
-                    for method in &self.instance_methods {
-                        writeln!(
-                            w,
-                            "\t{}{}{} {}({});",
-                            if let Some(offset) = method.vtable_offset {
-                                format!("/* @0x{offset:x} */ ")
-                            } else {
-                                " ".into()
-                            },
-                            if method.is_virtual { "virtual " } else { "" },
-                            method.return_type_name,
-                            method.name.to_string(),
-                            method.arguments.join(", ")
-                        )?;
-                    }
-                }
-
-                if !self.static_methods.is_empty() {
-                    writeln!(w, "\t")?;
-                    for method in &self.static_methods {
-                        writeln!(
-                            w,
-                            "\t{}static {} {}({});",
-                            if method.is_virtual { "virtual " } else { "" },
-                            method.return_type_name,
-                            method.name.to_string(),
-                            method.arguments.join(", ")
-                        )?;
-                    }
-                }
-
-                writeln!(w, "}}")?;
+        if !self.base_classes.is_empty() {
+            for (i, base) in self.base_classes.iter().enumerate() {
+                let prefix = match i {
+                    0 => ":",
+                    _ => ",",
+                };
+                write!(w, "{} {}", prefix, base.type_name)?;
             }
         }
+
+        writeln!(w, " {{")?;
+
+        for base in &self.base_classes {
+            writeln!(
+                w,
+                "\t/* offset 0x{:03x} */ /* fields for {} */",
+                base.offset, base.type_name
+            )?;
+        }
+
+        for field in &self.fields {
+            match config.language {
+                Language::Rust => writeln!(
+                    w,
+                    "\t/* offset 0x{:03x} */ {}: {},",
+                    field.offset,
+                    field.name.to_string(),
+                    field.type_name,
+                )?,
+                Language::Cpp => writeln!(
+                    w,
+                    "\t/* offset 0x{:03x} */ {} {};",
+                    field.offset,
+                    field.type_name,
+                    field.name.to_string()
+                )?,
+            }
+        }
+
+        if !self.instance_methods.is_empty() {
+            writeln!(w, "\t")?;
+            for method in &self.instance_methods {
+                writeln!(
+                    w,
+                    "\t{}{}{} {}({});",
+                    if let Some(offset) = method.vtable_offset {
+                        format!("/* @0x{offset:x} */ ")
+                    } else {
+                        " ".into()
+                    },
+                    if method.is_virtual { "virtual " } else { "" },
+                    method.return_type_name,
+                    method.name.to_string(),
+                    method.arguments.join(", ")
+                )?;
+            }
+        }
+
+        if !self.static_methods.is_empty() {
+            writeln!(w, "\t")?;
+            for method in &self.static_methods {
+                writeln!(
+                    w,
+                    "\t{}static {} {}({});",
+                    if method.is_virtual { "virtual " } else { "" },
+                    method.return_type_name,
+                    method.name.to_string(),
+                    method.arguments.join(", ")
+                )?;
+            }
+        }
+
+        writeln!(w, "}}")?;
 
         Ok(())
     }
@@ -662,7 +596,13 @@ impl<'p> Enum<'p> {
         Ok(())
     }
 
-    fn add_field(&mut self, _: &Config, _: &pdb::TypeFinder<'p>, field: &pdb::TypeData<'p>, _: &mut TypeSet) {
+    fn add_field(
+        &mut self,
+        _: &Config,
+        _: &pdb::TypeFinder<'p>,
+        field: &pdb::TypeData<'p>,
+        _: &mut TypeSet,
+    ) {
         // ignore everything else even though that's sad
         if let pdb::TypeData::Enumerate(ref data) = field {
             self.values.push(EnumValue {
@@ -745,11 +685,7 @@ struct Data<'p> {
 
 impl<'p> Data<'p> {
     fn write_with_config(&self, w: &mut dyn Write, config: &Config) -> std::io::Result<()> {
-        let tool_name = match config.language {
-            Language::Rust => "pdb2rs",
-            Language::Cpp => "pdb2hpp",
-        };
-        writeln!(w, "// automatically generated by {}\n// do not edit", tool_name)?;
+        writeln!(w, "// automatically generated by pdb2src\n// do not edit")?;
 
         if !self.forward_references.is_empty() {
             writeln!(w)?;
@@ -914,7 +850,10 @@ fn main() {
     let language = match Language::from_str(language_str) {
         Some(lang) => lang,
         None => {
-            eprintln!("error: unsupported language '{}'. Supported languages: rust, cpp", language_str);
+            eprintln!(
+                "error: unsupported language '{}'. Supported languages: rust, cpp",
+                language_str
+            );
             return;
         }
     };
