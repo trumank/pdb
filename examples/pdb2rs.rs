@@ -5,8 +5,8 @@ use pdb::{FallibleIterator, PrimitiveKind, PrimitiveType};
 
 type TypeSet = BTreeSet<pdb::TypeIndex>;
 
-pub fn type_name<'p>(
-    type_finder: &pdb::TypeFinder<'p>,
+pub fn type_name(
+    type_finder: &pdb::TypeFinder<'_>,
     type_index: pdb::TypeIndex,
     needed_types: &mut TypeSet,
 ) -> pdb::Result<String> {
@@ -415,8 +415,8 @@ impl<'p> Method<'p> {
     }
 }
 
-fn argument_list<'p>(
-    type_finder: &pdb::TypeFinder<'p>,
+fn argument_list(
+    type_finder: &pdb::TypeFinder<'_>,
     type_index: pdb::TypeIndex,
     needed_types: &mut TypeSet,
 ) -> pdb::Result<Vec<String>> {
@@ -650,7 +650,6 @@ impl<'p> Data<'p> {
 fn write_class(filename: &str, class_name: &str) -> pdb::Result<()> {
     let file = std::fs::File::open(filename)?;
     let mut pdb = pdb::PDB::open(file)?;
-    dbg!(pdb.pdb_information()?.signature);
 
     let type_information = pdb.type_information()?;
     let mut type_finder = type_information.finder();
@@ -664,7 +663,6 @@ fn write_class(filename: &str, class_name: &str) -> pdb::Result<()> {
         type_finder.update(&type_iter);
 
         if let Ok(pdb::TypeData::Class(class)) = typ.parse() {
-            //println!("{}", class.name);
             if class.name.as_bytes() == class_name.as_bytes()
                 && !class.properties.forward_reference()
             {

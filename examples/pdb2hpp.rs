@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use pdb::FallibleIterator;
+use pdb::{FallibleIterator, PrimitiveKind, PrimitiveType};
 
 type TypeSet = BTreeSet<pdb::TypeIndex>;
 
@@ -15,7 +15,9 @@ pub fn type_name(
             let mut name = match data.kind {
                 pdb::PrimitiveKind::Void => "void".to_string(),
                 pdb::PrimitiveKind::Char => "char".to_string(),
+                pdb::PrimitiveKind::RChar => "char".to_string(),
                 pdb::PrimitiveKind::UChar => "unsigned char".to_string(),
+                pdb::PrimitiveKind::WChar => "wchar_t".to_string(),
 
                 pdb::PrimitiveKind::I8 => "int8_t".to_string(),
                 pdb::PrimitiveKind::U8 => "uint8_t".to_string(),
@@ -28,6 +30,9 @@ pub fn type_name(
 
                 pdb::PrimitiveKind::F32 => "float".to_string(),
                 pdb::PrimitiveKind::F64 => "double".to_string(),
+
+                pdb::PrimitiveKind::UShort => "uint16_t".to_string(),
+                pdb::PrimitiveKind::UQuad => "uint64_t".to_string(),
 
                 pdb::PrimitiveKind::Bool8 => "bool".to_string(),
 
@@ -56,10 +61,18 @@ pub fn type_name(
             data.name.to_string().into_owned()
         }
 
-        pdb::TypeData::Pointer(data) => format!(
-            "{}*",
-            type_name(type_finder, data.underlying_type, needed_types)?
-        ),
+        pdb::TypeData::Pointer(data) => {
+            let is_func = matches!(
+                type_finder.find(data.underlying_type)?.parse()?,
+                pdb::TypeData::Procedure(_)
+            );
+            let suffix = if is_func { "" } else { "*" };
+            format!(
+                "{}{}",
+                type_name(type_finder, data.underlying_type, needed_types)?,
+                suffix
+            )
+        }
 
         pdb::TypeData::Modifier(data) => {
             if data.constant {
@@ -84,6 +97,41 @@ pub fn type_name(
                 name = format!("{}[{}]", name, size);
             }
             name
+        }
+
+        pdb::TypeData::Procedure(data) => {
+            let return_type = if let Some(ret) = data.return_type {
+                let ret_str = type_name(type_finder, ret, needed_types)?;
+                if ret_str == "void" {
+                    None
+                } else {
+                    Some(format!(" -> {}", ret_str))
+                }
+            } else {
+                None
+            };
+            let arguments = type_name(type_finder, data.argument_list, needed_types)?;
+            format!(
+                "{}({})",
+                return_type
+                    .map(|r| format!("{}(*)", r.replace(" -> ", "")))
+                    .unwrap_or_else(|| "void(*)".to_string()),
+                arguments
+            )
+        }
+
+        pdb::TypeData::ArgumentList(data) => {
+            let mut buf = String::new();
+            let mut iter = data.arguments.iter().peekable();
+            let mut cur = iter.next();
+            while let Some(arg) = cur {
+                buf.push_str(&type_name(type_finder, *arg, needed_types)?);
+                cur = iter.next();
+                if cur.is_some() {
+                    buf.push_str(", ");
+                }
+            }
+            buf
         }
 
         _ => format!("Type{} /* TODO: figure out how to name it */", type_index),
@@ -171,6 +219,7 @@ impl<'p> Class<'p> {
                     type_finder,
                     data.method_type,
                     needed_types,
+                    data.vtable_offset,
                 )?;
                 if data.attributes.is_static() {
                     self.static_methods.push(method);
@@ -187,6 +236,7 @@ impl<'p> Class<'p> {
                         for pdb::MethodListEntry {
                             attributes,
                             method_type,
+                            vtable_offset,
                             ..
                         } in method_list.methods
                         {
@@ -197,6 +247,7 @@ impl<'p> Class<'p> {
                                 type_finder,
                                 method_type,
                                 needed_types,
+                                vtable_offset,
                             )?;
 
                             if attributes.is_static() {
@@ -263,7 +314,7 @@ impl fmt::Display for Class<'_> {
         for base in &self.base_classes {
             writeln!(
                 f,
-                "\t/* offset {:3} */ /* fields for {} */",
+                "\t/* offset 0x{:03x} */ /* fields for {} */",
                 base.offset, base.type_name
             )?;
         }
@@ -271,10 +322,10 @@ impl fmt::Display for Class<'_> {
         for field in &self.fields {
             writeln!(
                 f,
-                "\t/* offset {:3} */ {} {};",
+                "\t/* offset 0x{:03x} */ {}: {},",
                 field.offset,
+                field.name.to_string(),
                 field.type_name,
-                field.name.to_string()
             )?;
         }
 
@@ -283,7 +334,12 @@ impl fmt::Display for Class<'_> {
             for method in &self.instance_methods {
                 writeln!(
                     f,
-                    "\t{}{} {}({});",
+                    "\t{}{}{} {}({});",
+                    if let Some(offset) = method.vtable_offset {
+                        format!("/* @0x{offset:x} */ ")
+                    } else {
+                        " ".into()
+                    },
                     if method.is_virtual { "virtual " } else { "" },
                     method.return_type_name,
                     method.name.to_string(),
@@ -331,6 +387,7 @@ struct Method<'p> {
     return_type_name: String,
     arguments: Vec<String>,
     is_virtual: bool,
+    vtable_offset: Option<u32>,
 }
 
 impl<'p> Method<'p> {
@@ -340,6 +397,7 @@ impl<'p> Method<'p> {
         type_finder: &pdb::TypeFinder<'p>,
         type_index: pdb::TypeIndex,
         needed_types: &mut TypeSet,
+        vtable_offset: Option<u32>,
     ) -> pdb::Result<Method<'p>> {
         match type_finder.find(type_index)?.parse()? {
             pdb::TypeData::MemberFunction(data) => Ok(Method {
@@ -347,6 +405,7 @@ impl<'p> Method<'p> {
                 return_type_name: type_name(type_finder, data.return_type, needed_types)?,
                 arguments: argument_list(type_finder, data.argument_list, needed_types)?,
                 is_virtual: attributes.is_virtual(),
+                vtable_offset,
             }),
 
             other => {
@@ -401,6 +460,10 @@ impl<'p> Enum<'p> {
                     self.add_fields(type_finder, continuation, needed_types)?;
                 }
             }
+            pdb::TypeData::Primitive(PrimitiveType {
+                kind: PrimitiveKind::NoType,
+                indirection: None,
+            }) => {}
             other => {
                 println!(
                     "trying to Enum::add_fields() got {} -> {:?}",
