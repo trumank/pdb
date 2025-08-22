@@ -255,6 +255,10 @@ pub fn type_name<'p>(
             buf
         }
 
+        pdb::TypeData::Bitfield(data) => {
+            type_name(config, type_finder, data.underlying_type, needed_types)?
+        }
+
         _ => format!("Type{} /* TODO: figure out how to name it */", type_index),
     };
 
@@ -329,10 +333,20 @@ impl<'p> Class<'p> {
         match *field {
             pdb::TypeData::Member(ref data) => {
                 // TODO: attributes (static, virtual, etc.)
+
+                let bitfield_info = match type_finder.find(data.field_type)?.parse()? {
+                    pdb::TypeData::Bitfield(bitfield_data) => Some(BitFieldInfo {
+                        bit_position: bitfield_data.position,
+                        bit_size: bitfield_data.length,
+                    }),
+                    _ => None,
+                };
+
                 self.fields.push(Field {
                     type_name: type_name(config, type_finder, data.field_type, needed_types)?,
                     name: data.name,
                     offset: data.offset,
+                    bitfield: bitfield_info,
                 });
             }
 
@@ -451,20 +465,46 @@ impl<'p> Class<'p> {
 
         for field in &self.fields {
             match config.language {
-                Language::Rust => writeln!(
-                    w,
-                    "\t/* offset 0x{:03x} */ {}: {},",
-                    field.offset,
-                    field.name.to_string(),
-                    field.type_name,
-                )?,
-                Language::Cpp => writeln!(
-                    w,
-                    "\t/* offset 0x{:03x} */ {} {};",
-                    field.offset,
-                    field.type_name,
-                    field.name.to_string()
-                )?,
+                Language::Rust => {
+                    if let Some(ref bitfield) = field.bitfield {
+                        writeln!(
+                            w,
+                            "\t/* offset 0x{:03x} */ {}: {}, // : {}",
+                            field.offset,
+                            field.name.to_string(),
+                            field.type_name,
+                            bitfield.bit_size,
+                        )?;
+                    } else {
+                        writeln!(
+                            w,
+                            "\t/* offset 0x{:03x} */ {}: {},",
+                            field.offset,
+                            field.name.to_string(),
+                            field.type_name,
+                        )?;
+                    }
+                }
+                Language::Cpp => {
+                    if let Some(ref bitfield) = field.bitfield {
+                        writeln!(
+                            w,
+                            "\t/* offset 0x{:03x} */ {} {} : {};",
+                            field.offset,
+                            field.type_name,
+                            field.name.to_string(),
+                            bitfield.bit_size
+                        )?;
+                    } else {
+                        writeln!(
+                            w,
+                            "\t/* offset 0x{:03x} */ {} {};",
+                            field.offset,
+                            field.type_name,
+                            field.name.to_string()
+                        )?;
+                    }
+                }
             }
         }
 
@@ -520,6 +560,13 @@ struct Field<'p> {
     type_name: String,
     name: pdb::RawString<'p>,
     offset: u64,
+    bitfield: Option<BitFieldInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BitFieldInfo {
+    bit_position: u8,
+    bit_size: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
